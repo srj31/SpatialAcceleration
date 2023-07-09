@@ -28,14 +28,14 @@ struct rect {
 };
 }
 
-constexpr size_t MAX_DEPTH = 0;
+constexpr size_t MAX_DEPTH = 8;
 
 template<typename Type>
 class StaticQuadTree {
  public:
-  StaticQuadTree(size_t m_depth = 0, const olc::rect &m_rect = {{0.0f, 0.0f}, {100.0f, 100.0f}})
-      : m_depth(m_depth), m_rect(m_rect) {
-    resize(m_rect);
+  StaticQuadTree( size_t nDepth = 0, const olc::rect &rArea = {{0.0f, 0.0f}, {100000.0f, 100000.0f}}) {
+    m_depth = nDepth;
+    resize(rArea);
 
   }
   void resize(const olc::rect &rArea) {
@@ -52,15 +52,15 @@ class StaticQuadTree {
 
   void clear() {
     m_pItems.clear();
-    for(int i =0;i<4;i++) {
-     if(m_pChild[i]) m_pChild[i]->clear();
-     m_pChild[i].reset();
+    for (int i = 0; i < 4; i++) {
+      if (m_pChild[i]) m_pChild[i]->clear();
+      m_pChild[i].reset();
     }
   }
 
   size_t size() const {
     size_t nCount = m_pItems.size();
-    for (auto child : m_pChild) if (child) nCount += child += child->size();
+    for (int i = 0; i < 4; i++) if (m_pChild[i]) nCount += m_pChild[i]->size();
     return nCount;
   }
 
@@ -82,12 +82,12 @@ class StaticQuadTree {
     m_pItems.push_back({item_size, item});
   }
 
-  std::list<Type> search(const olc::rect &search_area) const {
+  [[nodiscard]] std::list<Type> search(const olc::rect &search_area) const {
     std::list<Type> itemsInside;
     search(search_area, itemsInside);
     return itemsInside;
   }
-
+// Returns the objects in the given search area, by adding to supplied list
   void search(const olc::rect &rArea, std::list<Type> &listItems) const {
     for (auto const &p : m_pItems) {
       if (rArea.overlaps(p.first)) listItems.push_back(p.second);
@@ -113,7 +113,7 @@ class StaticQuadTree {
     for (int i = 0; i < 4; i++) if (m_pChild[i]) m_pChild[i]->items(listItem);
   }
 
-  inline const olc::rect &area() { return m_rect; }
+  const olc::rect &area() { return m_rect; }
 
  protected:
   size_t m_depth = 0;
@@ -121,6 +121,81 @@ class StaticQuadTree {
   std::array<olc::rect, 4> m_rChild{}; // dimensions of the children quadTree
   std::array<std::shared_ptr<StaticQuadTree<Type>>, 4> m_pChild{}; // sub QuadTrees in each subsection
   std::vector<std::pair<olc::rect, Type>> m_pItems;
+};
+template<typename Type>
+class StaticQuadTreeContainer {
+  // Using a std::list as we dont want pointers to be invalidated to objects stored in the
+  // tree should the contents of the tree change
+  using QuadTreeContainer = std::list<Type>;
+
+ protected:
+  // The actual container
+  QuadTreeContainer m_allItems;
+
+  // Use our StaticQuadTree to store "pointers" instead of objects - this reduces
+  // overheads when moving or copying objects
+  StaticQuadTree<typename QuadTreeContainer::iterator> root;
+
+ public:
+  StaticQuadTreeContainer(const olc::rect &size = {{0.0f, 0.0f}, {100.0f, 100.0f}}, const size_t nDepth = 0)
+      : root(nDepth, size) {
+
+  }
+
+  // Sets the spatial coverage area of the quadtree
+  // Invalidates tree
+  void resize(const olc::rect &rArea) {
+    root.resize(rArea);
+  }
+
+  // Returns number of items within tree
+  size_t size() const {
+    return m_allItems.size();
+  }
+
+  // Returns true if tree is empty
+  bool empty() const {
+    return m_allItems.empty();
+  }
+
+  // Removes all items from tree
+  void clear() {
+    root.clear();
+    m_allItems.clear();
+  }
+
+  // Convenience functions for ranged for loop
+  typename QuadTreeContainer::iterator begin() {
+    return m_allItems.begin();
+  }
+
+  typename QuadTreeContainer::iterator end() {
+    return m_allItems.end();
+  }
+
+  typename QuadTreeContainer::const_iterator cbegin() {
+    return m_allItems.cbegin();
+  }
+
+  typename QuadTreeContainer::const_iterator cend() {
+    return m_allItems.cend();
+  }
+
+  void insert(const Type &item, const olc::rect &itemsize) {
+    // Item is stored in container
+    m_allItems.push_back(item);
+
+    // Pointer/Area of item is stored in quad tree
+    root.insert(std::prev(m_allItems.end()), itemsize);
+  }
+
+  // Returns a std::list of pointers to items within the search area
+  [[nodiscard]] std::list<typename QuadTreeContainer::iterator> search(const olc::rect &rArea) const {
+    std::list<typename QuadTreeContainer::iterator> listItemPointers;
+    root.search(rArea, listItemPointers);
+    return listItemPointers;
+  }
+
 };
 
 class Example_StaticQuadTree : public olc::PixelGameEngine {
@@ -140,7 +215,7 @@ class Example_StaticQuadTree : public olc::PixelGameEngine {
   };
 
   std::vector<Object2d> vecObjects;
-  StaticQuadTree<Object2d> treeObjects;
+  StaticQuadTreeContainer<Object2d> treeObjects;
 
   float fArea = 100'000.0f;
 
@@ -169,7 +244,7 @@ class Example_StaticQuadTree : public olc::PixelGameEngine {
  public:
   bool OnUserCreate() override {
     tv.Initialise({ScreenWidth(), ScreenHeight()});
-    treeObjects.resize(olc::rect({0.0f,0.0f}, {fArea, fArea}));
+    treeObjects.resize(olc::rect({0.0f, 0.0f}, {fArea, fArea}));
 
     auto rand_float = [this](const float l, const float r) {
       return Example_StaticQuadTree::RandomFloat(this->seed) * (r - l) + l;
@@ -202,9 +277,9 @@ class Example_StaticQuadTree : public olc::PixelGameEngine {
     if (bUseQuadTree) {
 
       auto tpStart = std::chrono::system_clock::now();
-      for (auto const& ob: treeObjects.search(rScreen)) {
-          tv.FillRectDecal(ob.vPos, ob.vSize, ob.colour);
-          nObjectCount++;
+      for (auto const &ob : treeObjects.search(rScreen)) {
+        tv.FillRectDecal(ob->vPos, ob->vSize, ob->colour);
+        nObjectCount++;
       }
       std::chrono::duration<float> duration = std::chrono::system_clock::now() - tpStart;
       std::string
@@ -233,6 +308,6 @@ class Example_StaticQuadTree : public olc::PixelGameEngine {
 
 int main() {
   Example_StaticQuadTree demo;
-  if (demo.Construct(1000, 500, 1, 1, false, false)) demo.Start();
+  if (demo.Construct(1260, 600, 1, 1, false, false)) demo.Start();
   return 0;
 }
